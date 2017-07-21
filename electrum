@@ -105,6 +105,7 @@ from electrum.commands import get_parser, known_commands, Commands, config_varia
 from electrum import daemon
 from electrum import keystore
 from electrum.mnemonic import Mnemonic
+from electrum.transaction import Transaction
 
 # get password routine
 def prompt_password(prompt, confirm=True):
@@ -319,6 +320,9 @@ if __name__ == '__main__':
     # parse command line
     parser = get_parser()
     args = parser.parse_args()
+
+    # Anti-replay protection
+    Transaction.ANTI_REPLAY = args.tx_invalid
 
     # config is an object passed to the various constructors (wallet, interface, gui)
     if is_android:

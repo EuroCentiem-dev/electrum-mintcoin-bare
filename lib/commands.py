@@ -807,6 +807,7 @@ def add_global_options(parser):
     group.add_argument("-D", "--dir", dest="electrum_path", help="electrum directory")
     group.add_argument("-P", "--portable", action="store_true", dest="portable", default=False, help="Use local 'electrum_data' directory")
     group.add_argument("-w", "--wallet", dest="wallet_path", help="wallet path")
+    group.add_argument("--tx-invalid", dest="tx_invalid", type=str, choices=['hf', 'legacy'], help="create transactions invalid on the given chain for anti-replay protection")
     group.add_argument("--testnet", action="store_true", dest="testnet", default=False, help="Use Testnet")
     group.add_argument("--segwit", action="store_true", dest="segwit", default=False, help="The Wizard will create Segwit seed phrases (Testnet only).")
     group.add_argument("--nolnet", action="store_true", dest="nolnet", default=False, help="Use Nolnet")
