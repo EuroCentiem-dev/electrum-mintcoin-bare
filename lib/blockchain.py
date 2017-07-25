@@ -27,6 +27,8 @@
 
 import os
 import util
+import threading
+
 import bitcoin
 from bitcoin import *
 
@@ -135,6 +137,9 @@ class Blockchain(util.PrintError):
         self.cur_chunk = None
         self.checkpoint = checkpoint
         self.parent_id = parent_id
+        self.lock = threading.Lock()
+        with self.lock:
+            self.update_size()
 
     def parent(self):
         return blockchains[self.parent_id]
@@ -158,18 +163,23 @@ class Blockchain(util.PrintError):
         height = header.get('block_height')
         return header_hash == self.get_hash(height)
 
-    def fork(parent, checkpoint):
+    def fork(parent, header):
+        checkpoint = header.get('block_height')
         self = Blockchain(parent.config, checkpoint, parent.checkpoint)
-        # create file
         open(self.path(), 'w+').close()
+        self.save_header(header)
         return self
 
     def height(self):
         return self.checkpoint + self.size() - 1
 
     def size(self):
+        with self.lock:
+            return self._size
+
+    def update_size(self):
         p = self.path()
-        return os.path.getsize(p)/80 if os.path.exists(p) else 0
+        self._size = os.path.getsize(p)/80 if os.path.exists(p) else 0
 
     def verify_header(self, header, prev_header, bits):
         prev_hash = hash_header(prev_header)
@@ -210,32 +220,26 @@ class Blockchain(util.PrintError):
         if d < 0:
             chunk = chunk[-d:]
             d = 0
-        with open(filename, 'rb+') as f:
-            f.seek(d)
-            f.write(chunk)
-        # order files
-        if self.parent_id is not None and self.parent().get_branch_size() < self.size():
-            self.swap_with_parent()
+        self.write(chunk, d)
+        self.swap_with_parent()
 
     def swap_with_parent(self):
+        if self.parent_id is None:
+            return
+        parent_branch_size = self.parent().height() - self.checkpoint + 1
+        if parent_branch_size >= self.size():
+            return
         self.print_error("swap", self.checkpoint, self.parent_id)
         parent_id = self.parent_id
         checkpoint = self.checkpoint
         parent = self.parent()
-        size = parent.get_branch_size()
-        with open(parent.path(), 'rb+') as f:
-            f.seek((checkpoint - parent.checkpoint)*80)
-            parent_data = f.read(size*80)
-            f.seek((checkpoint - parent.checkpoint)*80)
-            f.truncate()
-        with open(self.path(), 'rb+') as f:
+        with open(self.path(), 'rb') as f:
             my_data = f.read()
-            f.seek(0)
-            f.truncate()
-            f.write(parent_data)
-        with open(parent.path(), 'rb+') as f:
+        with open(parent.path(), 'rb') as f:
             f.seek((checkpoint - parent.checkpoint)*80)
-            f.write(my_data)
+            parent_data = f.read(parent_branch_size*80)
+        self.write(parent_data, 0)
+        parent.write(my_data, (checkpoint - parent.checkpoint)*80)
         # store file path
         for b in blockchains.values():
             b.old_path = b.path()
@@ -252,18 +256,26 @@ class Blockchain(util.PrintError):
         blockchains[self.checkpoint] = self
         blockchains[parent.checkpoint] = parent
 
-    def save_header(self, header):
+    def write(self, data, offset):
         filename = self.path()
+        with self.lock:
+            with open(filename, 'rb+') as f:
+                if offset != self._size*80:
+                    f.seek(offset)
+                    f.truncate()
+                f.seek(offset)
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            self.update_size()
+
+    def save_header(self, header):
         delta = header.get('block_height') - self.checkpoint
         data = serialize_header(header).decode('hex')
         assert delta == self.size()
         assert len(data) == 80
-        with open(filename, 'rb+') as f:
-            f.seek(delta * 80)
-            f.write(data)
-        # order files
-        if self.parent_id is not None and self.parent().get_branch_size() < self.size():
-            self.swap_with_parent()
+        self.write(data, delta*80)
+        self.swap_with_parent()
 
     def read_header(self, height):
         assert self.parent_id != self.checkpoint
@@ -333,9 +345,9 @@ class Blockchain(util.PrintError):
         new_target = (prior_target * span) / target_span
         return target_to_bits(new_target)
 
-    def can_connect(self, header):
+    def can_connect(self, header, check_height=True):
         height = header['block_height']
-        if self.height() != height - 1:
+        if check_height and self.height() != height - 1:
             return False
         if height == 0:
             return hash_header(header) == bitcoin.GENESIS
